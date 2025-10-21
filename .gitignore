@@ -43,5 +43,4 @@ env/
 # OS
 .DS_Store
 Thumbs.db
-
-CHANGELOG.md
+test_portfolio_api.py

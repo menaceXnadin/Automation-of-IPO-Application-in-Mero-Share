@@ -805,8 +805,28 @@ def apply_ipo(auto_load=True, headless=False):
             
             print("Fetching IPO list...\n")
             
-            page.wait_for_selector(".company-list", timeout=10000)
-            time.sleep(2)
+            try:
+                page.wait_for_selector(".company-list", timeout=10000)
+                time.sleep(2)
+            except Exception as e:
+                print("⚠ No IPOs currently available on Meroshare")
+                print("✗ Cannot proceed with IPO application\n")
+                
+                try:
+                    no_data = page.query_selector("text=No Data Available")
+                    if no_data:
+                        print("→ Meroshare shows: 'No Data Available'")
+                except:
+                    pass
+                
+                page.screenshot(path="no_ipos_available.png")
+                print("📸 Screenshot saved: no_ipos_available.png\n")
+                
+                if not headless:
+                    print("Browser will stay open for 20 seconds...")
+                    time.sleep(20)
+                
+                return
             
             company_rows = page.query_selector_all(".company-list")
             
@@ -1327,42 +1347,464 @@ def test_login_for_member(member, headless=True):
         finally:
             browser.close()
 
-def get_dp_list():
-    """Fetch and display available DP list with values"""
+def apply_ipo_for_all_members(headless=False):
+    """Apply IPO for all family members - Sequential Login + Sequential Application"""
+    
+    # Load family members
+    config = load_family_members()
+    members = config.get('members', [])
+    
+    if not members:
+        print("\n⚠ No family members found. Add members first!\n")
+        return
+    
+    # Display members
+    print("\n" + "="*60)
+    print("FAMILY MEMBERS TO APPLY IPO")
+    print("="*60)
+    for idx, member in enumerate(members, 1):
+        print(f"{idx}. {member['name']} - Kitta: {member['applied_kitta']} | CRN: {member['crn_number']}")
+    print("="*60)
+    
+    # Confirmation
+    confirm = input(f"\n⚠ Apply IPO for ALL {len(members)} members? (yes/no): ").strip().lower()
+    if confirm != 'yes':
+        print("✗ Operation cancelled")
+        return
+    
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
+        browser = p.chromium.launch(headless=headless, slow_mo=100 if not headless else 0)
+        context = browser.new_context()
         
         try:
-            print("\nFetching DP list from Meroshare...")
-            page.goto("https://meroshare.cdsc.com.np/#/login", wait_until="networkidle")
+            # ========== PHASE 1: CREATE TABS & LOGIN ALL MEMBERS ==========
+            print("\n" + "="*60)
+            print("PHASE 1: MULTI-TAB LOGIN (ALL MEMBERS)")
+            print("="*60)
+            
+            pages_data = []
+            
+            # Create tabs and login sequentially (but keep all tabs open)
+            print(f"\n🚀 Opening {len(members)} tabs and logging in...\n")
+            
+            for idx, member in enumerate(members, 1):
+                member_name = member['name']
+                page = context.new_page()
+                
+                try:
+                    print(f"[Tab {idx}] Starting login for: {member_name}")
+                    
+                    # Navigate
+                    page.goto("https://meroshare.cdsc.com.np/#/login", wait_until="networkidle")
+                    time.sleep(2)
+                    
+                    # Select DP
+                    page.click("span.select2-selection")
+                    time.sleep(1)
+                    page.wait_for_selector(".select2-results", timeout=5000)
+                    
+                    search_box = page.query_selector("input.select2-search__field")
+                    if search_box:
+                        search_box.type(member['dp_value'])
+                        time.sleep(0.5)
+                        first_result = page.query_selector("li.select2-results__option--highlighted, li.select2-results__option[aria-selected='true']")
+                        if first_result:
+                            first_result.click()
+                        else:
+                            page.keyboard.press("Enter")
+                    time.sleep(1)
+                    
+                    # Fill username
+                    username_selectors = [
+                        "input[formcontrolname='username']",
+                        "input#username",
+                        "input[placeholder*='User']"
+                    ]
+                    for selector in username_selectors:
+                        try:
+                            page.fill(selector, member['username'], timeout=2000)
+                            break
+                        except:
+                            continue
+                    
+                    # Fill password
+                    password_selectors = [
+                        "input[formcontrolname='password']",
+                        "input[type='password']"
+                    ]
+                    for selector in password_selectors:
+                        try:
+                            page.fill(selector, member['password'], timeout=2000)
+                            break
+                        except:
+                            continue
+                    
+                    # Click login
+                    login_button_selectors = [
+                        "button.btn.sign-in",
+                        "button[type='submit']",
+                        "button:has-text('Login')"
+                    ]
+                    for selector in login_button_selectors:
+                        try:
+                            page.click(selector, timeout=2000)
+                            break
+                        except:
+                            continue
+                    
+                    # Wait for login
+                    try:
+                        page.wait_for_function("window.location.hash !== '#/login'", timeout=8000)
+                        time.sleep(2)
+                    except:
+                        time.sleep(2)
+                    
+                    # Check if logged in
+                    if "#/login" not in page.url.lower():
+                        print(f"✓ [Tab {idx}] Login successful: {member_name}")
+                        pages_data.append({"success": True, "member": member, "page": page, "tab_index": idx})
+                    else:
+                        print(f"✗ [Tab {idx}] Login failed: {member_name}")
+                        pages_data.append({"success": False, "member": member, "page": page, "tab_index": idx, "error": "Login failed"})
+                        
+                except Exception as e:
+                    print(f"✗ [Tab {idx}] Error logging in {member_name}: {e}")
+                    pages_data.append({"success": False, "member": member, "page": page, "tab_index": idx, "error": str(e)})
+            
+            # Summary of login phase
+            successful_logins = [p for p in pages_data if p['success']]
+            failed_logins = [p for p in pages_data if not p['success']]
+            
+            print("\n" + "="*60)
+            print(f"LOGIN SUMMARY: {len(successful_logins)}/{len(members)} successful")
+            print("="*60)
+            for p in successful_logins:
+                print(f"✓ {p['member']['name']}")
+            if failed_logins:
+                for p in failed_logins:
+                    print(f"✗ {p['member']['name']} - {p.get('error', 'Unknown error')}")
+            print("="*60)
+            
+            if not successful_logins:
+                print("\n✗ No successful logins. Exiting...")
+                return
+            
+            # Continue with successful logins only
+            if failed_logins:
+                proceed = input(f"\n⚠ {len(failed_logins)} login(s) failed. Continue with {len(successful_logins)} member(s)? (yes/no): ").strip().lower()
+                if proceed != 'yes':
+                    print("✗ Operation cancelled")
+                    return
+            
+            # ========== PHASE 2: SEQUENTIAL IPO APPLICATION ==========
+            print("\n" + "="*60)
+            print("PHASE 2: IPO APPLICATION (SEQUENTIAL)")
+            print("="*60)
+            
+            # Use first successful login to select IPO
+            first_page = successful_logins[0]['page']
+            
+            print("\nNavigating to IPO page to select IPO...")
+            first_page.goto("https://meroshare.cdsc.com.np/#/asba", wait_until="networkidle")
             time.sleep(3)
             
-            # Get all options from the hidden select
-            options = page.query_selector_all("select.select2-hidden-accessible option")
+            print("Fetching available IPOs...\n")
             
-            print("\n" + "="*70)
-            print("AVAILABLE DEPOSITORY PARTICIPANTS (DPs)")
-            print("="*70)
-            print(f"{'Value':<8} {'Name'}")
-            print("-"*70)
+            # Check if there are any IPOs available
+            try:
+                first_page.wait_for_selector(".company-list", timeout=10000)
+                time.sleep(2)
+            except Exception as e:
+                print("⚠ No IPOs currently available on Meroshare")
+                print("✗ Cannot proceed with IPO application\n")
+                
+                # Check if there's a "no data" message
+                try:
+                    no_data = first_page.query_selector("text=No Data Available")
+                    if no_data:
+                        print("→ Meroshare shows: 'No Data Available'")
+                except:
+                    pass
+                
+                first_page.screenshot(path="no_ipos_available.png")
+                print("📸 Screenshot saved: no_ipos_available.png\n")
+                
+                if not headless:
+                    print("Browser will stay open for 20 seconds...")
+                    time.sleep(20)
+                
+                return
             
-            dp_list = []
-            for option in options:
-                value = option.get_attribute("value")
-                text = option.inner_text().strip()
-                if value and value != "":
-                    dp_list.append((value, text))
-                    print(f"{value:<8} {text}")
+            company_rows = first_page.query_selector_all(".company-list")
             
-            print("="*70)
-            print(f"Total DPs: {len(dp_list)}")
-            print("\nNote: Use the VALUE (first column) when setting up credentials\n")
+            available_ipos = []
+            for idx, row in enumerate(company_rows, 1):
+                try:
+                    company_name_elem = row.query_selector(".company-name span")
+                    share_type_elem = row.query_selector(".share-of-type")
+                    share_group_elem = row.query_selector(".isin")
+                    
+                    if company_name_elem and share_type_elem and share_group_elem:
+                        company_name = company_name_elem.inner_text().strip()
+                        share_type = share_type_elem.inner_text().strip()
+                        share_group = share_group_elem.inner_text().strip()
+                        
+                        if "ipo" in share_type.lower() and "ordinary" in share_group.lower():
+                            available_ipos.append({
+                                "index": len(available_ipos) + 1,
+                                "company_name": company_name,
+                                "share_type": share_type,
+                                "share_group": share_group
+                            })
+                except Exception as e:
+                    pass
+            
+            if not available_ipos:
+                print("✗ No IPOs available to apply!")
+                return
+            
+            print("="*60)
+            print("AVAILABLE IPOs (Ordinary Shares)")
+            print("="*60)
+            for ipo in available_ipos:
+                print(f"{ipo['index']}. {ipo['company_name']}")
+                print(f"   Type: {ipo['share_type']} | Group: {ipo['share_group']}")
+                print()
+            print("="*60)
+            
+            if not headless:
+                selection = input(f"\nSelect IPO to apply for all members (1-{len(available_ipos)}): ").strip()
+                try:
+                    selected_idx = int(selection) - 1
+                    if selected_idx < 0 or selected_idx >= len(available_ipos):
+                        print("✗ Invalid selection!")
+                        return
+                except ValueError:
+                    print("✗ Invalid input!")
+                    return
+            else:
+                selected_idx = 0
+            
+            selected_ipo = available_ipos[selected_idx]
+            print(f"\n✓ Selected IPO: {selected_ipo['company_name']}")
+            print(f"\n⚠ Will apply this IPO for {len(successful_logins)} member(s)\n")
+            
+            # Apply IPO for each member sequentially
+            application_results = []
+            
+            for page_data in successful_logins:
+                member = page_data['member']
+                page = page_data['page']
+                tab_index = page_data['tab_index']
+                member_name = member['name']
+                
+                print("\n" + "="*60)
+                print(f"[Tab {tab_index}] APPLYING FOR: {member_name}")
+                print("="*60)
+                
+                try:
+                    # Navigate to ASBA
+                    print(f"[Tab {tab_index}] Navigating to IPO page...")
+                    page.goto("https://meroshare.cdsc.com.np/#/asba", wait_until="networkidle")
+                    time.sleep(3)
+                    
+                    # Find and click the IPO
+                    page.wait_for_selector(".company-list", timeout=10000)
+                    time.sleep(2)
+                    
+                    company_rows = page.query_selector_all(".company-list")
+                    ipo_found = False
+                    
+                    for row in company_rows:
+                        try:
+                            company_name_elem = row.query_selector(".company-name span")
+                            if company_name_elem and selected_ipo['company_name'] in company_name_elem.inner_text():
+                                apply_button = row.query_selector("button.btn-issue")
+                                if apply_button:
+                                    print(f"[Tab {tab_index}] Clicking Apply button...")
+                                    apply_button.click()
+                                    ipo_found = True
+                                    break
+                        except:
+                            continue
+                    
+                    if not ipo_found:
+                        raise Exception("IPO not found or already applied")
+                    
+                    time.sleep(3)
+                    
+                    # Fill form
+                    print(f"[Tab {tab_index}] Filling application form...")
+                    page.wait_for_selector("select#selectBank", timeout=10000)
+                    time.sleep(2)
+                    
+                    # Select bank
+                    bank_options = page.query_selector_all("select#selectBank option")
+                    valid_banks = [opt for opt in bank_options if opt.get_attribute("value")]
+                    if valid_banks:
+                        page.select_option("select#selectBank", valid_banks[0].get_attribute("value"))
+                    time.sleep(2)
+                    
+                    # Select account
+                    page.wait_for_selector("select#accountNumber", timeout=5000)
+                    account_options = page.query_selector_all("select#accountNumber option")
+                    valid_accounts = [opt for opt in account_options if opt.get_attribute("value")]
+                    if valid_accounts:
+                        page.select_option("select#accountNumber", valid_accounts[0].get_attribute("value"))
+                    time.sleep(2)
+                    
+                    # Fill kitta
+                    print(f"[Tab {tab_index}] Kitta: {member['applied_kitta']}")
+                    page.fill("input#appliedKitta", str(member['applied_kitta']))
+                    time.sleep(1)
+                    
+                    # Fill CRN
+                    print(f"[Tab {tab_index}] CRN: {member['crn_number']}")
+                    page.fill("input#crnNumber", member['crn_number'])
+                    time.sleep(1)
+                    
+                    # Accept disclaimer
+                    disclaimer_checkbox = page.query_selector("input#disclaimer")
+                    if disclaimer_checkbox:
+                        disclaimer_checkbox.check()
+                    time.sleep(1)
+                    
+                    # Click proceed
+                    print(f"[Tab {tab_index}] Clicking Proceed...")
+                    proceed_button = page.query_selector("button.btn-primary[type='submit']")
+                    if proceed_button:
+                        proceed_button.click()
+                    time.sleep(3)
+                    
+                    # Enter PIN
+                    print(f"[Tab {tab_index}] Entering transaction PIN...")
+                    page.wait_for_selector("input#transactionPIN", timeout=10000)
+                    time.sleep(2)
+                    page.fill("input#transactionPIN", member['transaction_pin'])
+                    time.sleep(2)
+                    
+                    # Submit
+                    print(f"[Tab {tab_index}] Submitting application...")
+                    clicked = False
+                    
+                    # Try multiple methods to click Apply button
+                    try:
+                        apply_buttons = page.query_selector_all("button:has-text('Apply')")
+                        for btn in apply_buttons:
+                            if btn.is_visible() and not btn.is_disabled():
+                                btn.click()
+                                clicked = True
+                                break
+                    except:
+                        pass
+                    
+                    if not clicked:
+                        try:
+                            submit_button = page.query_selector("div.confirm-page-btn button.btn-primary[type='submit']")
+                            if submit_button and submit_button.is_visible():
+                                submit_button.click()
+                                clicked = True
+                        except:
+                            pass
+                    
+                    if not clicked:
+                        try:
+                            page.evaluate("""
+                                const buttons = document.querySelectorAll('button');
+                                for (const btn of buttons) {
+                                    if (btn.textContent.includes('Apply') && btn.type === 'submit') {
+                                        btn.click();
+                                        break;
+                                    }
+                                }
+                            """)
+                            clicked = True
+                        except:
+                            pass
+                    
+                    if not clicked:
+                        raise Exception("Failed to click submit button")
+                    
+                    time.sleep(5)
+                    
+                    print(f"✓ [Tab {tab_index}] Application submitted for {member_name}!")
+                    application_results.append({"member": member_name, "success": True})
+                    
+                except Exception as e:
+                    print(f"✗ [Tab {tab_index}] Failed for {member_name}: {e}")
+                    application_results.append({"member": member_name, "success": False, "error": str(e)})
+                    page.screenshot(path=f"error_{member_name}.png")
+            
+            # ========== FINAL SUMMARY ==========
+            print("\n" + "="*60)
+            print("FINAL SUMMARY")
+            print("="*60)
+            print(f"IPO: {selected_ipo['company_name']}")
+            print()
+            
+            successful_apps = [r for r in application_results if r['success']]
+            failed_apps = [r for r in application_results if not r['success']]
+            
+            print(f"✓ SUCCESSFUL: {len(successful_apps)}/{len(application_results)}")
+            for r in successful_apps:
+                print(f"  ✓ {r['member']}")
+            
+            if failed_apps:
+                print(f"\n✗ FAILED: {len(failed_apps)}")
+                for r in failed_apps:
+                    print(f"  ✗ {r['member']} - {r.get('error', 'Unknown error')}")
+            
+            print("="*60)
+            
+            if not headless:
+                print("\nBrowser will stay open for 60 seconds for verification...")
+                time.sleep(60)
             
         except Exception as e:
-            print(f"Error fetching DP list: {e}")
+            print(f"\n✗ Critical error: {e}")
+            import traceback
+            traceback.print_exc()
         finally:
             browser.close()
+
+def get_dp_list():
+    """Fetch and display available DP list with values from API"""
+    import requests
+    
+    try:
+        print("\nFetching DP list from Meroshare API...")
+        
+        # Fetch data from API
+        response = requests.get("https://webbackend.cdsc.com.np/api/meroShare/capital/")
+        response.raise_for_status()
+        
+        dp_data = response.json()
+        
+        # Sort by name for better readability
+        dp_data.sort(key=lambda x: x['name'])
+        
+        print("\n" + "="*80)
+        print("AVAILABLE DEPOSITORY PARTICIPANTS (DPs)")
+        print("="*80)
+        print(f"{'ID':<6} {'Code':<8} {'Name'}")
+        print("-"*80)
+        
+        for dp in dp_data:
+            dp_id = dp['id']
+            code = dp['code']
+            name = dp['name']
+            print(f"{dp_id:<6} {code:<8} {name}")
+        
+        print("="*80)
+        print(f"Total DPs: {len(dp_data)}")
+        print("\nNote: Use the ID (first column) when setting up credentials")
+        print("      (e.g., 139 for CREATIVE SECURITIES, 146 for GLOBAL IME CAPITAL)\n")
+        
+    except requests.RequestException as e:
+        print(f"✗ Error fetching DP list from API: {e}")
+        print("  Please check your internet connection.\n")
+    except Exception as e:
+        print(f"✗ Unexpected error: {e}\n")
 
 def main():
     """Main menu"""
@@ -1377,8 +1819,9 @@ def main():
     print("5. Login (test) - Select member")
     print("6. View DP list")
     print("7. Exit")
+    print("8. 🚀 Apply IPO for ALL family members (Multi-tab)")
     
-    choice = input("\nEnter your choice (1-7): ").strip()
+    choice = input("\nEnter your choice (1-8): ").strip()
     
     if choice == "1":
         apply_ipo(auto_load=True, headless=True)
@@ -1400,6 +1843,8 @@ def main():
     elif choice == "7":
         print("Goodbye!")
         return
+    elif choice == "8":
+        apply_ipo_for_all_members(headless=True)
     else:
         print("Invalid choice!")
 

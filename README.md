@@ -73,7 +73,7 @@ nepse dp-list
 
 All credential data is stored in a **fixed location** to avoid path issues:
 
-📁 **Data Directory**: `C:\Users\MenaceXnadin\Documents\merosharedata\`
+📁 **Data Directory**: `C:\Users\%USERNAME%\Documents\merosharedata\`
 
 Files stored here:
 - `family_members.json` - All family member credentials

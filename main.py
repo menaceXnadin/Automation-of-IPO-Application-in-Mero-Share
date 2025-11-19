@@ -843,7 +843,16 @@ def apply_ipo(auto_load=True, headless=False):
                         share_group = share_group_elem.inner_text().strip()
                         
                         if "ipo" in share_type.lower() and "ordinary" in share_group.lower():
+                            # Check for both Apply and Edit buttons
                             apply_button = row.query_selector("button.btn-issue")
+                            
+                            # Check if IPO is already applied (button shows 'Edit')
+                            is_applied = False
+                            button_text = ""
+                            if apply_button:
+                                button_text = apply_button.inner_text().strip().lower()
+                                is_applied = "edit" in button_text or "view" in button_text
+                            
                             if apply_button:
                                 available_ipos.append({
                                     "index": len(available_ipos) + 1,
@@ -851,7 +860,9 @@ def apply_ipo(auto_load=True, headless=False):
                                     "share_type": share_type,
                                     "share_group": share_group,
                                     "element": row,
-                                    "apply_button": apply_button
+                                    "apply_button": apply_button,
+                                    "is_applied": is_applied,
+                                    "button_text": button_text
                                 })
                 except Exception as e:
                     print(f"    Error parsing row {idx}: {e}")
@@ -886,6 +897,19 @@ def apply_ipo(auto_load=True, headless=False):
             
             selected_ipo = available_ipos[selected_idx]
             print(f"\n✓ Selected: {selected_ipo['company_name']}\n")
+            
+            # Check if IPO is already applied
+            if selected_ipo.get('is_applied', False):
+                print(f"⚠ IPO already applied for this account!")
+                print(f"   Button shows: '{selected_ipo.get('button_text', 'N/A').title()}'")
+                print(f"   (Edit button indicates IPO was already applied)")
+                page.screenshot(path="ipo_already_applied.png")
+                print("📸 Screenshot saved: ipo_already_applied.png\n")
+                
+                if not headless:
+                    print("Browser will stay open for 20 seconds...")
+                    time.sleep(20)
+                return
             
             print("Clicking Apply button...")
             selected_ipo['apply_button'].click()
@@ -1203,6 +1227,8 @@ def get_portfolio_for_member(member, headless=False):
                 print(f"{'#':<5} {'Scrip':<12} {'Balance':<12} {'Last Price':<12} {'Value(Last)':<15} {'LTP':<12} {'Value(LTP)':<15}")
                 print("-"*120)
                 
+                total_value_ltp = 0.0
+                
                 for row in rows:
                     cells = row.query_selector_all("td")
                     if cells and len(cells) >= 7:
@@ -1213,8 +1239,18 @@ def get_portfolio_for_member(member, headless=False):
                         value_last = cells[4].inner_text().strip()
                         ltp = cells[5].inner_text().strip()
                         value_ltp = cells[6].inner_text().strip()
+                        
+                        # Calculate total
+                        try:
+                            value_ltp_num = float(value_ltp.replace(',', ''))
+                            total_value_ltp += value_ltp_num
+                        except:
+                            pass
+                        
                         print(f"{num:<5} {scrip:<12} {balance:<12} {last_price:<12} {value_last:<15} {ltp:<12} {value_ltp:<15}")
                 
+                print("-"*120)
+                print(f"{'TOTAL':<71} Rs. {total_value_ltp:,.2f}")
                 print("="*120)
             
             if not headless:
@@ -1347,7 +1383,7 @@ def test_login_for_member(member, headless=True):
         finally:
             browser.close()
 
-def apply_ipo_for_all_members(headless=False):
+def apply_ipo_for_all_members(headless=True):
     """Apply IPO for all family members - Sequential Login + Sequential Application"""
     
     # Load family members
@@ -1614,6 +1650,7 @@ def apply_ipo_for_all_members(headless=False):
                     
                     company_rows = page.query_selector_all(".company-list")
                     ipo_found = False
+                    already_applied = False
                     
                     for row in company_rows:
                         try:
@@ -1621,15 +1658,29 @@ def apply_ipo_for_all_members(headless=False):
                             if company_name_elem and selected_ipo['company_name'] in company_name_elem.inner_text():
                                 apply_button = row.query_selector("button.btn-issue")
                                 if apply_button:
-                                    print(f"[Tab {tab_index}] Clicking Apply button...")
-                                    apply_button.click()
-                                    ipo_found = True
-                                    break
+                                    # Check button text to see if already applied (shows 'Edit')
+                                    button_text = apply_button.inner_text().strip().lower()
+                                    
+                                    if "edit" in button_text or "view" in button_text:
+                                        print(f"[Tab {tab_index}] ⚠ IPO already applied (button shows: '{button_text.title()}')")
+                                        already_applied = True
+                                        ipo_found = True
+                                        break
+                                    else:
+                                        print(f"[Tab {tab_index}] Clicking Apply button (button shows: '{button_text.title()}')...")
+                                        apply_button.click()
+                                        ipo_found = True
+                                        break
                         except:
                             continue
                     
                     if not ipo_found:
-                        raise Exception("IPO not found or already applied")
+                        raise Exception("IPO not found in the list")
+                    
+                    if already_applied:
+                        print(f"[Tab {tab_index}] ✓ Skipping - IPO already applied for {member_name}")
+                        application_results.append({"member": member_name, "success": True, "status": "already_applied"})
+                        continue
                     
                     time.sleep(3)
                     
@@ -1744,10 +1795,19 @@ def apply_ipo_for_all_members(headless=False):
             
             successful_apps = [r for r in application_results if r['success']]
             failed_apps = [r for r in application_results if not r['success']]
+            already_applied_apps = [r for r in successful_apps if r.get('status') == 'already_applied']
+            newly_applied_apps = [r for r in successful_apps if r.get('status') != 'already_applied']
             
             print(f"✓ SUCCESSFUL: {len(successful_apps)}/{len(application_results)}")
-            for r in successful_apps:
-                print(f"  ✓ {r['member']}")
+            if newly_applied_apps:
+                print(f"\n  Newly Applied ({len(newly_applied_apps)}):")
+                for r in newly_applied_apps:
+                    print(f"  ✓ {r['member']}")
+            
+            if already_applied_apps:
+                print(f"\n  Already Applied ({len(already_applied_apps)}):")
+                for r in already_applied_apps:
+                    print(f"  ⚠ {r['member']} (skipped)")
             
             if failed_apps:
                 print(f"\n✗ FAILED: {len(failed_apps)}")
@@ -1808,20 +1868,29 @@ def get_dp_list():
 
 def main():
     """Main menu"""
+    from nepse_cli import cmd_ipo, cmd_nepse, cmd_subidx, cmd_mktsum, cmd_topgl, cmd_stonk
+    
     print("\n" + "="*50)
     print("    MEROSHARE FAMILY IPO AUTOMATION")
     print("="*50)
-    print("\nOptions:")
+    print("\n📋 Portfolio & IPO Management:")
     print("1. Apply for IPO - Select family member")
     print("2. Add/Update family member")
     print("3. List all family members")
     print("4. Get Portfolio - Select member")
     print("5. Login (test) - Select member")
     print("6. View DP list")
-    print("7. Exit")
-    print("8. 🚀 Apply IPO for ALL family members (Multi-tab)")
+    print("7. 🚀 Apply IPO for ALL family members (Multi-tab)")
+    print("\n📊 Market Data:")
+    print("8. View Open IPOs")
+    print("9. View NEPSE Indices")
+    print("10. View Sub-Indices")
+    print("11. Market Summary")
+    print("12. Top Gainers & Losers")
+    print("13. Stock Details")
+    print("\n0. Exit")
     
-    choice = input("\nEnter your choice (1-8): ").strip()
+    choice = input("\nEnter your choice (0-13): ").strip()
     
     if choice == "1":
         apply_ipo(auto_load=True, headless=True)
@@ -1841,10 +1910,35 @@ def main():
     elif choice == "6":
         get_dp_list()
     elif choice == "7":
+        apply_ipo_for_all_members(headless=True)
+    elif choice == "8":
+        cmd_ipo()
+        input("\nPress Enter to continue...")
+    elif choice == "9":
+        cmd_nepse()
+        input("\nPress Enter to continue...")
+    elif choice == "10":
+        print("\nAvailable sub-indices: banking, development-bank, finance, hotels-and-tourism,")
+        print("hydropower, investment, life-insurance, manufacturing-and-processing,")
+        print("microfinance, non-life-insurance, others, trading")
+        subidx_name = input("\nEnter sub-index name: ").strip()
+        if subidx_name:
+            cmd_subidx(subidx_name)
+            input("\nPress Enter to continue...")
+    elif choice == "11":
+        cmd_mktsum()
+        input("\nPress Enter to continue...")
+    elif choice == "12":
+        cmd_topgl()
+        input("\nPress Enter to continue...")
+    elif choice == "13":
+        symbol = input("\nEnter stock symbol (e.g., NABIL): ").strip().upper()
+        if symbol:
+            cmd_stonk(symbol)
+            input("\nPress Enter to continue...")
+    elif choice == "0":
         print("Goodbye!")
         return
-    elif choice == "8":
-        apply_ipo_for_all_members(headless=True)
     else:
         print("Invalid choice!")
 

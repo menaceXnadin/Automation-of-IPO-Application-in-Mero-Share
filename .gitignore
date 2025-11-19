@@ -43,4 +43,3 @@ env/
 # OS
 .DS_Store
 Thumbs.db
-test_portfolio_api.py

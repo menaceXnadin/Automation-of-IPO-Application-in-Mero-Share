@@ -107,9 +107,6 @@ nepse topgl
 # View stock details (information only - no charts)
 nepse stonk NABIL
 nepse stonk NICA
-  # Keep window open when running from Win+R or desktop shortcuts
-  nepse ipo --wait
-  nepse stonk NABIL --wait
 ```
 
 ## Features

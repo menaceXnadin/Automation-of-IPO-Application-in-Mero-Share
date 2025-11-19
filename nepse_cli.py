@@ -549,6 +549,8 @@ Examples:
   nepse portfolio --gui    Get portfolio with browser window visible
         """
     )
+    # Keep window open after running (useful when invoking from Windows Run dialog)
+    parser.add_argument("--wait", action="store_true", help="Keep window open after running (useful when running from Win+R or desktop shortcuts)")
     
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
     
@@ -660,6 +662,18 @@ Examples:
         sys.exit(0)
     except Exception as e:
         print(f"\n✗ Error: {e}")
+    finally:
+        # If --wait is provided, pause before exiting so users running from Win+R
+        # or desktop shortcuts can read the output. Also provide a gentle hint
+        # if running non-interactively but --wait is not provided.
+        try:
+            if getattr(args, 'wait', False):
+                input("\nPress Enter to exit...")
+            elif not sys.stdin.isatty():
+                print("\nNote: This process was started without an active terminal. To keep the window open, run from PowerShell/Command Prompt or add '--wait' flag.")
+        except Exception:
+            # Ignore any input-related errors (e.g., no stdin)
+            pass
         sys.exit(1)
 
 if __name__ == "__main__":
